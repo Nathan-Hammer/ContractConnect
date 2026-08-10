@@ -1,0 +1,22 @@
+{
+  "name": "contract-connect",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "security:verify": "node scripts/security-verify.mjs",
+    "security:verify:deployment": "node scripts/post-deploy-verify.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.112.0",
+    "@vitejs/plugin-react": "6.0.5",
+    "vite": "8.2.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "lucide-react": "1.28.0"
+  },
+  "devDependencies": {}
+}
