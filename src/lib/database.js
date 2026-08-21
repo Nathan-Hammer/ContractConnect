@@ -20,7 +20,7 @@ const toInteraction = (row) => ({
   id: row.id, companyId: row.company_id, contactId: row.contact_id,
   type: row.type, date: row.interaction_date, summary: row.summary, notes: row.notes || '',
 })
-const toFollowup = (row) => ({ id: row.id, companyId: row.company_id, contactId: row.contact_id, title: row.title, dueDate: row.due_date, priority: row.priority, completed: row.completed })
+const toFollowup = (row) => ({ id: row.id, companyId: row.company_id, contactId: row.contact_id, title: row.title, dueDate: row.due_date, priority: row.priority, completed: row.completed, assignedTo: row.assigned_to || null, emailReminderSentAt: row.email_reminder_sent_at || null })
 
 const fromCompany = (item) => ({
   id: item.id, name: item.name, industry: item.industry, location: item.location,
@@ -41,7 +41,7 @@ const fromContract = (item) => ({
   renewal_notice_days: Number(item.renewalNoticeDays || 60), auto_renew: Boolean(item.autoRenew),
   termination_notice_date: item.terminationNoticeDate || null,
 })
-const fromFollowup = (item) => ({ id: item.id, company_id: item.companyId, contact_id: item.contactId || null, title: item.title, due_date: item.dueDate, priority: item.priority, completed: Boolean(item.completed), completed_at: item.completed ? new Date().toISOString() : null })
+const fromFollowup = (item) => ({ id: item.id, company_id: item.companyId, contact_id: item.contactId || null, title: item.title, due_date: item.dueDate, priority: item.priority, completed: Boolean(item.completed), completed_at: item.completed ? new Date().toISOString() : null, ...(item.assignedTo ? { assigned_to: item.assignedTo } : {}) })
 
 export async function fetchCrmData() {
   if (!isSupabaseConfigured) return null
@@ -86,20 +86,6 @@ export async function resetDemoData() {
     if (error) throw error
   }
   return seedDemoData()
-}
-
-export async function createCompany(company) {
-  if (!isSupabaseConfigured) return company
-  const { data, error } = await supabase.from('companies').insert(fromCompany(company)).select().single()
-  if (error) throw error
-  return toCompany(data)
-}
-
-export async function createInteraction(interaction) {
-  if (!isSupabaseConfigured) return interaction
-  const { data, error } = await supabase.from('interactions').insert(fromInteraction(interaction)).select().single()
-  if (error) throw error
-  return toInteraction(data)
 }
 
 export async function saveRecord(kind, item) {

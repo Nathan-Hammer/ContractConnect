@@ -1,6 +1,6 @@
 import { isSupabaseConfigured, supabase } from './supabase'
 
-export const isProduction = import.meta.env.PROD
+const isProduction = import.meta.env.PROD
 export const demoMode = String(import.meta.env.VITE_DEMO_MODE || '').toLowerCase() === 'true'
 export const allowPublicSignup = String(import.meta.env.VITE_ALLOW_PUBLIC_SIGNUP || '').toLowerCase() === 'true'
 
@@ -39,7 +39,7 @@ export function clearSensitiveClientData() {
   SENSITIVE_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key))
 }
 
-export function assertSecureRuntimeConfiguration() {
+function assertSecureRuntimeConfiguration() {
   if (!isProduction) return
   if (!isSupabaseConfigured) throw new Error('Production requires a configured Supabase connection.')
   if (demoMode) throw new Error('Demo mode must be disabled in production.')

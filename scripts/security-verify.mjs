@@ -26,6 +26,37 @@ for (const section of ['Trust boundaries', 'STRIDE threat register', 'Prioritise
   assert(threatModel.includes(section), `Threat model contains ${section}`)
 }
 
+const requiredDocumentation = [
+  'README.md',
+  'CONTRIBUTING.md',
+  'docs/README.md',
+  'docs/product-overview.md',
+  'docs/requirements.md',
+  'docs/user-guide.md',
+  'docs/admin-guide.md',
+  'docs/development.md',
+  'docs/architecture.md',
+  'docs/database.md',
+  'docs/deployment.md',
+  'docs/testing.md',
+  'docs/operations.md',
+  'docs/troubleshooting.md',
+  'docs/adr/0001-dedicated-customer-deployments.md',
+  'SECURITY_OPERATIONS.md',
+]
+requiredDocumentation.forEach((file) => assert(fs.existsSync(path.join(root, file)), `Required documentation exists: ${file}`))
+
+const markdownFiles = [...walk('docs'), 'README.md', 'CONTRIBUTING.md', 'SECURITY_OPERATIONS.md', 'THREAT_MODEL.md', 'PROJECT_ROADMAP.md']
+  .filter((file) => file.endsWith('.md'))
+for (const file of markdownFiles) {
+  const links = [...read(file).matchAll(/\[[^\]]+\]\(([^)]+)\)/g)].map((match) => match[1])
+  for (const link of links) {
+    if (/^(https?:|mailto:|#)/i.test(link)) continue
+    const target = decodeURIComponent(link.split('#')[0])
+    assert(fs.existsSync(path.resolve(root, path.dirname(file), target)), `Local documentation link resolves: ${file} -> ${target}`)
+  }
+}
+
 const sourceText = walk('src').filter((file) => /\.(js|jsx)$/.test(file)).map(read).join('\n')
 assert(!sourceText.includes('dangerouslySetInnerHTML'), 'Application does not render raw HTML')
 assert(!/service[_-]?role/i.test(sourceText), 'No Supabase service-role credential is referenced by browser code')
@@ -60,4 +91,3 @@ if (failures.length) {
 }
 
 console.log(`Security verification passed: ${checks.length} controls checked.`)
-

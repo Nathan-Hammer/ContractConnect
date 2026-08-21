@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { ArrowLeft, Eye, EyeOff, FileText, LockKeyhole, Mail, UserRound } from 'lucide-react'
-import { sendPasswordReset, signIn, signUp, updatePassword } from './lib/auth'
+import { sendPasswordReset, signIn, signInWithMicrosoft, signUp, updatePassword } from './lib/auth'
 import { allowPublicSignup } from './lib/runtimeSecurity'
 
 export default function AuthScreen({ recovery = false }) {
@@ -12,6 +12,12 @@ export default function AuthScreen({ recovery = false }) {
   const [error, setError] = useState('')
   const change = (event) => setForm({ ...form, [event.target.name]: event.target.value })
   const switchMode = (next) => { setMode(next); setError(''); setMessage('') }
+
+  const microsoftSignIn = async () => {
+    setLoading(true); setError(''); setMessage('')
+    try { await signInWithMicrosoft() }
+    catch (err) { setError(err.message || 'Microsoft sign-in could not be started. Please try again.'); setLoading(false) }
+  }
 
   const submit = async (event) => {
     event.preventDefault(); setLoading(true); setError(''); setMessage('')
@@ -46,6 +52,7 @@ export default function AuthScreen({ recovery = false }) {
     <section className="auth-form-side"><div className="auth-card">
       {(mode === 'forgot' || mode === 'update') && <button className="auth-back" type="button" onClick={() => switchMode('signin')}><ArrowLeft size={16} /> Back to sign in</button>}
       <span className="auth-lock"><LockKeyhole size={19} /></span><h2>{heading}</h2><p>{intro}</p>
+      {mode === 'signin' && <><button className="microsoft-signin" type="button" onClick={microsoftSignIn} disabled={loading}><span className="microsoft-mark" aria-hidden="true"><i /><i /><i /><i /></span> Continue with Microsoft</button><div className="auth-divider"><span>or sign in with email</span></div></>}
       <form onSubmit={submit} className="auth-form">
         {mode === 'signup' && <label>Full name<div className="auth-input"><UserRound size={17} /><input required autoFocus name="name" value={form.name} onChange={change} placeholder="Your full name" /></div></label>}
         {mode !== 'update' && <label>Email address<div className="auth-input"><Mail size={17} /><input required autoFocus={mode !== 'signup'} type="email" name="email" autoComplete="email" value={form.email} onChange={change} placeholder="you@company.com" /></div></label>}
@@ -58,6 +65,6 @@ export default function AuthScreen({ recovery = false }) {
       </form>
       {mode === 'signin' && !allowPublicSignup && <div className="auth-switch">Access is invitation-only. Contact your ContractConnect administrator.</div>}
       {((mode === 'signin' && allowPublicSignup) || mode === 'signup') && <div className="auth-switch">{mode === 'signin' ? 'New to ContractConnect?' : 'Already have an account?'} <button onClick={() => switchMode(mode === 'signin' ? 'signup' : 'signin')}>{mode === 'signin' ? 'Create an account' : 'Sign in'}</button></div>}
-    </div><p className="auth-footer">Securely powered by Supabase authentication</p></section>
+    </div><p className="auth-footer">Securely powered by Supabase authentication and Microsoft Entra ID</p></section>
   </main>
 }

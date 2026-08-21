@@ -1,53 +1,84 @@
 # ContractConnect
 
-ContractConnect is a lightweight CRM for managing contracted companies, key contacts, contract terms, and relationship interactions.
+ContractConnect is a lightweight contract relationship management application. It combines company and contact records, contract lifecycle tracking, interaction history, follow-up tasks, document storage, reporting, governance, and audit trails in one React application backed by Supabase.
 
-Development progress is tracked in `PROJECT_ROADMAP.md`. Checklist items are marked complete only after implementation and verification.
+## Current status
 
-Security design and operating controls are documented in `THREAT_MODEL.md` and `SECURITY_OPERATIONS.md`.
+The application is an MVP intended for controlled demonstrations and dedicated single-customer deployments. Shared multi-tenant hosting is not supported: each production customer must use a separate Supabase project until tenant-aware data isolation is implemented.
 
-## Run locally
+Implemented capabilities include:
 
-```bash
+- Company, contact, contract, interaction, and follow-up management
+- Contract renewal windows and lifecycle status calculation
+- Private contract documents with manager-restricted access
+- Dashboard, search, filters, reports, CSV exports, and import templates
+- Supabase authentication, profiles, roles, and workspace approval
+- Audit logs and runtime security-event collection
+- Runtime security guards, security headers, and WAF-as-code
+- Scheduled repository and post-deployment security verification
+
+See [Product overview](docs/product-overview.md) and [Product roadmap](PROJECT_ROADMAP.md) for scope and deferred integrations.
+
+## Quick start
+
+Prerequisites: Node.js 22 and npm.
+
+```powershell
 npm install
+Copy-Item .env.example .env.local
 npm run dev
 ```
 
-Open the local address shown by Vite. The MVP stores changes in browser `localStorage`, so it works without a configured backend.
+Configure `.env.local` for either local demonstration or Supabase-backed development. Never commit this file.
 
-## Current MVP
+```env
+VITE_SUPABASE_URL=https://your-project-ref.supabase.co
+VITE_SUPABASE_ANON_KEY=your-publishable-or-anon-key
+VITE_DEMO_MODE=true
+VITE_ALLOW_PUBLIC_SIGNUP=true
+```
 
-- Relationship dashboard and renewal alerts
-- Searchable company, contact, contract, and interaction views
-- Company profiles with contacts, contracts, and activity history
-- Add-company and log-interaction workflows
-- Create, edit, and delete workflows for every CRM record type
-- Automatic fictional demo-data seeding when the connected database is empty
-- Responsive desktop and mobile navigation
-- Persistent demo data with a reset option
-- Account settings for display-name and password updates
-- Persistent light/dark themes and selectable or uploaded profile pictures
-- Dated, prioritized follow-up tasks with completion and overdue tracking
-- CSV exports and blank migration templates for controlled data preparation
+Demo and public-signup flags must both be `false` in production.
 
-## Planned production architecture
+## Validation
 
-The UI is ready to be connected to Supabase for PostgreSQL storage, authentication, role-based access, and file attachments.
+```powershell
+npm run security:verify
+npm run build
+```
 
-## Supabase connection
+After deployment:
 
-1. Create a Supabase project.
-2. Run `supabase-schema.sql` in the project's SQL Editor.
-3. Copy `.env.example` to `.env.local` and enter the project URL and anon key from Project Settings > API.
-4. Run `supabase-auth-migration.sql` in the SQL Editor to add user profiles and the signup trigger.
-5. In Authentication > Providers, keep Email enabled. Configure the Site URL and redirect URLs for your local and deployed addresses.
-6. Create an account from the ContractConnect sign-up screen and confirm the email if confirmation is enabled.
-7. Restart `npm run dev` after changing environment variables.
+```powershell
+npm run security:verify:deployment -- --url=https://your-production-host
+```
 
-To enable follow-up tasks, also run `supabase-followups-migration.sql` in the SQL Editor. Fictional follow-up records are seeded automatically when the table is empty.
+## Documentation
 
-For the hardened production configuration, run all feature migrations followed by `supabase-security-hardening-migration.sql`. Keep `VITE_DEMO_MODE=false` and `VITE_ALLOW_PUBLIC_SIGNUP=false`, disable public sign-up in Supabase, and approve new members from Governance.
+- [Documentation index](docs/README.md)
+- [Software requirements](docs/requirements.md)
+- [Local development](docs/development.md)
+- [Architecture](docs/architecture.md)
+- [Supabase and database setup](docs/database.md)
+- [Deployment guide](docs/deployment.md)
+- [User guide](docs/user-guide.md)
+- [Administrator guide](docs/admin-guide.md)
+- [Testing and quality](docs/testing.md)
+- [Operations runbook](docs/operations.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Security operations](SECURITY_OPERATIONS.md)
+- [Threat model](THREAT_MODEL.md)
+- [Contributing](CONTRIBUTING.md)
 
-Run `npm run security:verify` before deployment. Once deployed, verify the live security headers with `npm run security:verify:deployment -- --url=https://your-production-host`.
+## Important security rules
 
-Without these environment variables, ContractConnect remains in local demo mode. The sidebar shows the current connection state.
+- Use a dedicated Supabase project for every customer.
+- Apply all SQL migrations in the documented order.
+- Disable public sign-up in Supabase for production.
+- Keep demo mode and public sign-up disabled in production environment variables.
+- Treat RLS and Storage policies as the authorisation boundary; browser controls are not security controls.
+- Do not upload production data until organisational approval, backup, monitoring, and access-review processes are in place.
+
+## Licence
+
+No open-source licence has been assigned. Treat the repository and its contents as private and proprietary unless the owner states otherwise.
