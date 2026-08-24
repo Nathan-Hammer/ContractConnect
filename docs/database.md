@@ -16,8 +16,11 @@ Apply SQL files in this order through the Supabase SQL Editor:
 6. `supabase-profile-customization-migration.sql`
 7. `supabase-governance-migration.sql`
 8. `supabase-security-hardening-migration.sql`
+9. `supabase-production-business-data-migration.sql`
 
 The final migration activates existing profiles, makes new profiles inactive and Read-only, corrects management profile visibility, replaces CRM policies with active-member policies, and creates runtime security events.
+
+The production business-data migration adds server-side financial years, partner masters, period-specific partner targets, itemised partner sales, service-level agreements, and per-user notification read state. It also enables RLS, role-aware writes, database constraints, and audit triggers for shared business records.
 
 Record each applied migration, timestamp, operator, environment, and result in the deployment change record. Take a backup before applying a migration to a customer environment.
 
@@ -66,6 +69,18 @@ Database triggers capture table, record, operation, actor, and old/new JSON for 
 
 Stores sanitised runtime events: event type, severity, limited context, page path, actor, and timestamp. Users may insert events attributed to themselves; managers and administrators may read them.
 
+### `financial_years`, `partners`, `partner_targets`, and `partner_sales`
+
+Financial years define reporting periods. Partner identity is stored independently from each period's target so a new target does not overwrite historical commitments. Sales are itemised transactions linked to a period-specific target and either an existing company or a manually entered client name.
+
+### `service_level_agreements`
+
+Stores contract-linked service commitments, availability and time targets, review frequency, effective dates, and lifecycle status. Contract deletion cascades to its SLAs.
+
+### `notification_reads`
+
+Stores each user's read state for follow-up notifications. Rows are private to that user through RLS and are removed when the related follow-up or user is deleted.
+
 ## Role matrix
 
 | Capability | Administrator | Manager | Contributor | Read-only | Inactive |
@@ -109,4 +124,3 @@ After migrations, use separate test accounts for every role and verify direct Su
 - Add or update RLS for every new customer-owned table.
 - Test both positive and negative permission cases.
 - Document data backfills and recovery procedures.
-

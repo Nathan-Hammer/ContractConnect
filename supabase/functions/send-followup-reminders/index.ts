@@ -26,26 +26,25 @@ Deno.serve(async (request) => {
   const admin = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   })
-  const today = new Date().toISOString().slice(0, 10)
-  const { data: followups, error } = await admin
-    .from('followups')
-    .select('id,title,due_date,assigned_to,companies(name)')
-    .eq('completed', false)
-    .lte('due_date', today)
-    .is('email_reminder_sent_at', null)
-    .not('assigned_to', 'is', null)
-    .limit(100)
+  const dateParts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Windhoek', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date()).filter(({ type }) => type !== 'literal').map(({ type, value }) => [type, value]))
+  const today = `${dateParts.year}-${dateParts.month}-${dateParts.day}`
+  const { data: followups, error } = await admin.rpc('claim_due_followup_email_reminders', {
+    p_today: today,
+    p_limit: 100,
+    p_lease_minutes: 10,
+  })
 
   if (error) return json({ error: error.message }, 500)
 
   let sent = 0
-  const failures: Array<{ id: string; error: string }> = []
+  let failed = 0
   for (const followup of followups || []) {
     try {
       const { data: userData, error: userError } = await admin.auth.admin.getUserById(followup.assigned_to)
       if (userError || !userData.user?.email) throw new Error(userError?.message || 'Assigned user has no email address')
 
-      const company = Array.isArray(followup.companies) ? followup.companies[0]?.name : followup.companies?.name
       const delivery = await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: {
@@ -62,27 +61,46 @@ Deno.serve(async (request) => {
             `Your ContractConnect follow-up is due${followup.due_date < today ? ' and overdue' : ' today'}.`,
             '',
             `Follow-up: ${followup.title}`,
-            `Client: ${company || 'Not specified'}`,
+            `Client: ${followup.company_name || 'Not specified'}`,
             `Due date: ${followup.due_date}`,
             '',
             `Open ContractConnect: ${appUrl}`,
           ].join('\n'),
         }),
       })
-      if (!delivery.ok) throw new Error(`Email provider returned ${delivery.status}: ${await delivery.text()}`)
+      if (!delivery.ok) throw new Error(`Email provider returned HTTP ${delivery.status}`)
+      const providerResult = await delivery.json() as { id?: string }
+      if (!providerResult.id) throw new Error('Email provider did not return a message identifier')
 
-      const { error: updateError } = await admin.from('followups').update({
+      const { data: updated, error: updateError } = await admin.from('followups').update({
         email_reminder_sent_at: new Date().toISOString(),
+        email_reminder_provider_id: providerResult.id,
         email_reminder_error: null,
-      }).eq('id', followup.id).is('email_reminder_sent_at', null)
+        email_reminder_lease_token: null,
+        email_reminder_lease_until: null,
+        email_reminder_next_attempt_at: null,
+      }).eq('id', followup.id)
+        .eq('email_reminder_lease_token', followup.lease_token)
+        .is('email_reminder_sent_at', null)
+        .select('id')
+        .maybeSingle()
       if (updateError) throw updateError
+      if (!updated) throw new Error('Reminder lease expired before acceptance could be recorded')
       sent += 1
     } catch (sendError) {
+      failed += 1
       const message = sendError instanceof Error ? sendError.message : 'Unknown delivery error'
-      failures.push({ id: followup.id, error: message })
-      await admin.from('followups').update({ email_reminder_error: message.slice(0, 1000) }).eq('id', followup.id)
+      const terminal = followup.attempt_count >= 5
+      const retryMinutes = Math.min(15 * (2 ** Math.max(followup.attempt_count - 1, 0)), 360)
+      const nextAttempt = terminal ? null : new Date(Date.now() + retryMinutes * 60_000).toISOString()
+      await admin.from('followups').update({
+        email_reminder_error: message.slice(0, 300),
+        email_reminder_next_attempt_at: nextAttempt,
+        email_reminder_lease_token: null,
+        email_reminder_lease_until: null,
+      }).eq('id', followup.id).eq('email_reminder_lease_token', followup.lease_token)
     }
   }
 
-  return json({ processed: followups?.length || 0, sent, failures })
+  return json({ processed: followups?.length || 0, accepted: sent, failed })
 })

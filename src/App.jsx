@@ -1,19 +1,19 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   BarChart3, Bell, Building2, CalendarDays, Check, CheckSquare2, ChevronDown, ChevronRight, CircleDollarSign, Clock3, Database, Download,
   ExternalLink, FileSpreadsheet, FileText, FolderOpen, History, LayoutDashboard, Mail, MapPin, Menu, MessageSquareText, Moon,
   LogOut, MoreHorizontal, Pencil, Phone, Plus, RefreshCcw, Search, Settings, ShieldCheck, Sun, Trash2, Upload, Users, X,
 } from 'lucide-react'
-import { seedData } from './data'
 import AuthScreen from './AuthScreen'
-import { deleteRecord, fetchCrmData, resetDemoData, saveRecord, seedDemoData } from './lib/database'
+import { deleteRecord, fetchCrmData, saveRecord } from './lib/database'
 import { deleteContractDocument, fetchDocuments, openContractDocument, uploadContractDocument } from './lib/documents'
 import { fetchAuditLogs, fetchTeam, updateTeamAccess, updateTeamRole } from './lib/governance'
 import { getLinkedIdentities, getProfile, getSession, signOut, unlinkMicrosoftIdentity, updateAccount, uploadProfilePicture } from './lib/auth'
 import { isSupabaseConfigured, supabase } from './lib/supabase'
-import { clearSensitiveClientData, demoMode, reportSecurityEvent, startSessionGuard } from './lib/runtimeSecurity'
+import { clearSensitiveClientData, reportSecurityEvent, startSessionGuard } from './lib/runtimeSecurity'
+import { fetchBusinessData, markNotificationsRead as persistNotificationReads, recordPartnerSale, saveFinancialYear as persistFinancialYear, savePartnerTarget, saveServiceLevelAgreement } from './lib/businessData'
+import { beginOutlookConnection, disconnectOutlook as disconnectOutlookAccount, fetchOutlookCalendar, fetchOutlookEmail, fetchSharePointDocuments, getOutlookStatus } from './lib/outlook'
 
-const STORAGE_KEY = 'contractconnect-data-v1'
 const navItems = [
   { id: 'dashboard', label: 'Overview', icon: LayoutDashboard },
   { id: 'companies', label: 'Companies', icon: Building2, children: [{ id: 'companies', label: 'All companies' }, { id: 'partners', label: 'Partners' }] },
@@ -25,30 +25,7 @@ const navItems = [
   { id: 'reports', label: 'Reports', icon: BarChart3 },
 ]
 
-const demoPartnerTargets = [
-  { id: 'partner-1', name: 'Microsoft', productCategory: 'Microsoft 365 and Azure', annualTarget: 2400000, salesAchieved: 1785000, owner: 'Nathan Hammerslagt' },
-  { id: 'partner-2', name: 'HP', productCategory: 'Business devices and printing', annualTarget: 1850000, salesAchieved: 1235000, owner: 'Michael Amutenya' },
-  { id: 'partner-3', name: 'Fortinet', productCategory: 'Network and cyber security', annualTarget: 1500000, salesAchieved: 1090000, owner: 'Nandi Shilongo' },
-  { id: 'partner-4', name: 'Lenovo', productCategory: 'Computing and infrastructure', annualTarget: 1250000, salesAchieved: 710000, owner: 'Selma Uusiku' },
-  { id: 'partner-5', name: 'Veeam', productCategory: 'Backup and data protection', annualTarget: 900000, salesAchieved: 495000, owner: 'Nathan Hammerslagt' },
-]
-const PARTNER_TARGETS_KEY = 'contractconnect-partner-targets-v1'
-const SLA_STORAGE_KEY = 'contractconnect-slas-v1'
-const outlookConnectionKey = (userId) => `contractconnect-outlook-calendar-${userId}`
-const loadOutlookPreferences = (userId) => {
-  const saved = localStorage.getItem(outlookConnectionKey(userId))
-  if (saved === 'connected') return { connected: true, email: false, calendar: true }
-  try {
-    const preferences = JSON.parse(saved)
-    return { connected: Boolean(preferences?.connected), email: Boolean(preferences?.email), calendar: Boolean(preferences?.calendar) }
-  } catch { return { connected: false, email: false, calendar: false } }
-}
-const demoSlas = [
-  { id: 'sla-1', contractId: 'k2', title: 'Managed Cloud Support SLA', service: 'Cloud platform support and incident management', availabilityTarget: 99.9, responseHours: 1, resolutionHours: 8, startDate: '2025-10-01', endDate: '2026-09-30', reviewFrequency: 'Quarterly', status: 'Active' },
-  { id: 'sla-2', contractId: 'k3', title: 'Maintenance Response SLA', service: 'Priority maintenance and technical support', availabilityTarget: 99.5, responseHours: 2, resolutionHours: 12, startDate: '2025-09-15', endDate: '2026-08-31', reviewFrequency: 'Biannual', status: 'Active' },
-]
 
-const cloneSeed = () => JSON.parse(JSON.stringify(seedData))
 const formatDate = (value) => new Intl.DateTimeFormat('en-NA', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(`${value}T12:00:00`))
 const formatMoney = (value) => new Intl.NumberFormat('en-NA', { style: 'currency', currency: 'NAD', maximumFractionDigits: 0 }).format(value)
 const initials = (name = '') => name.split(' ').map((word) => word[0]).join('').slice(0, 2).toUpperCase()
@@ -63,11 +40,8 @@ const contractStatus = (contract) => {
   return 'Active'
 }
 
-function loadData() {
-  if (isSupabaseConfigured && !demoMode) return { companies: [], contacts: [], contracts: [], interactions: [], followups: [] }
-  try { return { ...cloneSeed(), ...(JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}) } }
-  catch { return cloneSeed() }
-}
+const emptyCrmData = () => ({ companies: [], contacts: [], contracts: [], interactions: [], followups: [] })
+const demoMode = false
 
 function Status({ children }) {
   const type = String(children).toLowerCase().replaceAll(' ', '-')
@@ -198,7 +172,7 @@ function DocumentForm({ contracts, companyById, canRestrict, onSave, onClose }) 
   </form>
 }
 
-function Dashboard({ data, companyById, userName, userId, setView, openCompany, openAddInteraction, openAddFollowup, onToggleFollowup }) {
+function Dashboard({ data, companyById, userName, outlook, weeklyMeetings, meetingsLoading, meetingsError, meetingsLastUpdated, onRefreshMeetings, setView, openCompany, openAddInteraction, openAddFollowup, onToggleFollowup }) {
   const [currentTime, setCurrentTime] = useState(() => new Date())
   useEffect(() => {
     const clock = window.setInterval(() => setCurrentTime(new Date()), 60000)
@@ -212,17 +186,10 @@ function Dashboard({ data, companyById, userName, userId, setView, openCompany, 
   const firstName = userName?.trim().split(/\s+/)[0] || 'there'
   const greeting = currentTime.getHours() < 12 ? 'Good morning' : 'Good afternoon'
   const currentDate = new Intl.DateTimeFormat('en-NA', { weekday: 'long', day: 'numeric', month: 'long' }).format(currentTime)
-  const outlookPreferences = loadOutlookPreferences(userId)
-  const outlookCalendarConnected = outlookPreferences.connected && outlookPreferences.calendar
-  const weekStart = new Date(currentTime); weekStart.setHours(12, 0, 0, 0); weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7))
-  const meetingDate = (dayOffset, hour, minute = 0) => { const date = new Date(weekStart); date.setDate(date.getDate() + dayOffset); date.setHours(hour, minute, 0, 0); return date }
-  const weeklyMeetings = [
-    { id: 'meeting-1', title: 'Digital Solutions weekly planning', start: meetingDate(1, 9), end: meetingDate(1, 10), location: 'Microsoft Teams', attendees: 6 },
-    { id: 'meeting-2', title: 'Client contract review', start: meetingDate(2, 14), end: meetingDate(2, 14, 45), location: 'Microsoft Teams', attendees: 4 },
-    { id: 'meeting-3', title: 'Partner sales pipeline', start: meetingDate(4, 10, 30), end: meetingDate(4, 11, 30), location: 'Boardroom / Teams', attendees: 8 },
-  ]
+  const outlookCalendarConnected = outlook.connected && outlook.calendar
   const meetingDay = (date) => new Intl.DateTimeFormat('en-NA', { weekday: 'short', day: 'numeric', month: 'short' }).format(date)
   const meetingTime = (date) => new Intl.DateTimeFormat('en-NA', { hour: '2-digit', minute: '2-digit' }).format(date)
+  const lastUpdatedLabel = meetingsLastUpdated ? new Intl.DateTimeFormat('en-NA', { hour: '2-digit', minute: '2-digit' }).format(meetingsLastUpdated) : null
   return <>
     <div className="welcome"><div><span className="eyebrow">{currentDate}</span><h1>{greeting}, {firstName}.</h1><p>Here’s what is happening across your company relationships.</p></div><button className="btn primary" onClick={openAddInteraction}><Plus size={17} /> Log interaction</button></div>
     <div className="stats-grid">
@@ -242,23 +209,23 @@ function Dashboard({ data, companyById, userName, userId, setView, openCompany, 
     <section className="panel dashboard-followups"><div className="panel-head"><div><span className="eyebrow">Next actions</span><h2>Upcoming follow-ups</h2></div><div className="panel-actions"><button className="text-btn" onClick={() => setView('followups')}>View all <ChevronRight size={16} /></button><button className="btn secondary" onClick={openAddFollowup}><Plus size={15} /> Add follow-up</button></div></div>
       {pendingFollowups.length ? <div className="dashboard-task-grid">{pendingFollowups.map((item) => { const overdue = item.dueDate < today; return <article className="dashboard-task" key={item.id}><button className="task-check" onClick={() => onToggleFollowup(item)} aria-label="Complete follow-up" /><div><Status>{overdue ? 'Overdue' : item.priority}</Status><strong>{item.title}</strong><small>{companyById[item.companyId]?.name}</small></div><time className={overdue ? 'overdue-date' : ''}>{formatDate(item.dueDate)}</time></article> })}</div> : <Empty title="You’re all caught up" text="There are no outstanding follow-ups." />}
     </section>
-    <section className="panel weekly-meetings"><div className="panel-head"><div><span className="eyebrow">Microsoft Outlook</span><h2>This week’s meetings</h2></div>{outlookCalendarConnected && <span className="calendar-connected"><span /> Calendar connected</span>}</div>{outlookCalendarConnected ? <div className="meeting-list">{weeklyMeetings.map((meeting) => <article key={meeting.id}><span className="meeting-date"><strong>{meetingDay(meeting.start).split(',')[0]}</strong><small>{meetingDay(meeting.start).split(',').slice(1).join(',')}</small></span><div><strong>{meeting.title}</strong><small>{meetingTime(meeting.start)}–{meetingTime(meeting.end)} · {meeting.location} · {meeting.attendees} attendees</small></div><button className="icon-btn" title="Open meeting in Outlook"><ExternalLink size={15} /></button></article>)}</div> : <div className="calendar-empty"><span><CalendarDays size={23} /></span><div><strong>{outlookPreferences.connected ? 'Outlook Calendar is not enabled' : 'Connect Microsoft Outlook'}</strong><p>{outlookPreferences.connected ? 'Enable Outlook calendar in your integration settings to show weekly meetings.' : 'Choose Outlook email, Outlook calendar, or both in Account Settings.'}</p></div><button className="btn secondary" onClick={() => setView('settings')}>Open integrations</button></div>}</section>
+    <section className="panel weekly-meetings"><div className="panel-head"><div><span className="eyebrow">Microsoft Outlook</span><h2>This week’s meetings</h2></div>{outlookCalendarConnected && <div className="calendar-refresh-actions"><span className="calendar-connected"><span /> Calendar connected</span>{lastUpdatedLabel && <small>Last updated {lastUpdatedLabel}</small>}<button className="btn secondary" disabled={meetingsLoading} onClick={onRefreshMeetings}><RefreshCcw size={14} className={meetingsLoading ? 'spin' : ''} /> {meetingsLoading ? 'Refreshing…' : 'Refresh'}</button></div>}</div>{outlookCalendarConnected ? <>{meetingsError && <div className="calendar-sync-warning" role="status"><strong>Calendar refresh failed.</strong> {meetingsError} {weeklyMeetings.length > 0 && 'Showing the last successfully retrieved meetings.'}</div>}{meetingsLoading && !weeklyMeetings.length ? <div className="calendar-empty"><span><CalendarDays size={23} /></span><div><strong>Loading Outlook meetings…</strong><p>Requesting this week’s events securely from Microsoft Graph.</p></div></div> : weeklyMeetings.length ? <div className="meeting-list">{weeklyMeetings.map((meeting) => <article key={meeting.id}><span className="meeting-date"><strong>{meetingDay(meeting.start).split(',')[0]}</strong><small>{meetingDay(meeting.start).split(',').slice(1).join(',')}</small></span><div><strong>{meeting.title}</strong><small>{meetingTime(meeting.start)}–{meetingTime(meeting.end)} · {meeting.location} · {meeting.attendees} attendees</small></div><button className="icon-btn" disabled={!meeting.webLink} onClick={() => meeting.webLink && window.open(meeting.webLink, '_blank', 'noopener,noreferrer')} title="Open meeting in Outlook"><ExternalLink size={15} /></button></article>)}</div> : !meetingsError && <div className="calendar-empty"><span><CalendarDays size={23} /></span><div><strong>No meetings this week</strong><p>Microsoft Outlook returned no calendar events for the current week.</p></div></div>}</> : <div className="calendar-empty"><span><CalendarDays size={23} /></span><div><strong>{outlook.connected ? 'Outlook Calendar is not enabled' : 'Connect Microsoft Outlook'}</strong><p>{outlook.connected ? 'Reconnect and grant calendar access to show weekly meetings.' : 'Choose Outlook email, Outlook calendar, or both in Account Settings.'}</p></div><button className="btn secondary" onClick={() => setView('settings')}>Open integrations</button></div>}</section>
   </>
 }
 
-function Companies({ companies, contacts, contracts, interactions, query, openCompany }) {
+function OutlookEmailPanel({ outlook, messages, loading, error, lastUpdated, onRefresh, onOpenSettings }) {
+  const updated = lastUpdated ? new Intl.DateTimeFormat('en-NA', { hour: '2-digit', minute: '2-digit' }).format(lastUpdated) : null
+  const emailDate = (date) => new Intl.DateTimeFormat('en-NA', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(date)
+  const enabled = outlook.connected && outlook.email
+  return <section className="panel outlook-email-panel"><div className="panel-head"><div><span className="eyebrow">Microsoft Outlook</span><h2>Recent client emails</h2><p>Read-only messages involving contacts registered in ContractConnect.</p></div>{enabled && <div className="calendar-refresh-actions">{updated && <small>Last updated {updated}</small>}<button className="btn secondary" disabled={loading} onClick={onRefresh}><RefreshCcw size={14} className={loading ? 'spin' : ''} /> {loading ? 'Refreshing…' : 'Refresh'}</button></div>}</div>{enabled ? <>{error && <div className="calendar-sync-warning" role="status"><strong>Email refresh failed.</strong> {error} {messages.length > 0 && 'Showing the last successfully retrieved messages.'}</div>}{loading && !messages.length ? <div className="calendar-empty"><span><Mail size={23} /></span><div><strong>Loading client emails…</strong><p>Matching recent Outlook messages to registered CRM contact addresses.</p></div></div> : messages.length ? <div className="outlook-email-list">{messages.map((message) => <article key={message.id} className={!message.isRead && message.direction === 'Received' ? 'unread' : ''}><span className={`email-direction ${message.direction.toLowerCase()}`}>{message.direction === 'Sent' ? <ExternalLink size={15} /> : <Mail size={15} />}</span><div><div><strong>{message.subject}</strong><time>{emailDate(message.date)}</time></div><small>{message.direction} · {message.contacts.join(', ') || 'Known CRM contact'}{message.hasAttachments ? ' · Attachment' : ''}</small>{message.preview && <p>{message.preview}</p>}</div><button className="icon-btn" disabled={!message.webLink} onClick={() => message.webLink && window.open(message.webLink, '_blank', 'noopener,noreferrer')} title="Open email in Outlook"><ExternalLink size={15} /></button></article>)}</div> : !error && <div className="calendar-empty"><span><Mail size={23} /></span><div><strong>No matching client emails</strong><p>No recent Inbox or Sent messages matched the email addresses stored under Contacts.</p></div></div>}</> : <div className="calendar-empty"><span><Mail size={23} /></span><div><strong>{outlook.connected ? 'Outlook Email is not enabled' : 'Connect Microsoft Outlook'}</strong><p>{outlook.connected ? 'Update Outlook permissions and select Outlook email.' : 'Connect Outlook Email in Account Settings to display CRM-related messages.'}</p></div><button className="btn secondary" onClick={onOpenSettings}>Open integrations</button></div>}</section>
+}
+
+function Companies({ companies, contacts, contracts, interactions, query, openCompany, financialYear, onSaveFinancialYear }) {
   const [viewMode, setViewMode] = useState('all')
   const [filters, setFilters] = useState(() => JSON.parse(localStorage.getItem('contractconnect-company-view') || '{"status":"All","industry":"All","owner":"All"}'))
-  const defaultFinancialYear = { start: `${new Date().getFullYear()}-01-01`, end: `${new Date().getFullYear()}-12-31` }
-  const [financialYear, setFinancialYear] = useState(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem('contractconnect-financial-year'))
-      return saved?.start && saved?.end ? saved : defaultFinancialYear
-    } catch {
-      return defaultFinancialYear
-    }
-  })
   const [financialYearDraft, setFinancialYearDraft] = useState(financialYear)
+  const [savingYear, setSavingYear] = useState(false)
+  useEffect(() => setFinancialYearDraft(financialYear), [financialYear])
   const industries = ['All', ...new Set(companies.map((c) => c.industry))]
   const owners = ['All', ...new Set(companies.map((c) => c.owner))]
   const updateFilter = (key, value) => setFilters((current) => ({ ...current, [key]: value }))
@@ -267,10 +234,12 @@ function Companies({ companies, contacts, contracts, interactions, query, openCo
   const previousFinancialYear = { start: shiftBackOneYear(financialYear.start), end: shiftBackOneYear(financialYear.end) }
   const rankingPeriod = viewMode === 'top20' ? previousFinancialYear : financialYear
   const rankingPeriodLabel = `${formatDate(rankingPeriod.start)} – ${formatDate(rankingPeriod.end)}`
-  const saveFinancialYear = () => {
+  const saveFinancialYear = async () => {
     if (!financialYearDraft.start || !financialYearDraft.end || financialYearDraft.start > financialYearDraft.end) return
-    setFinancialYear(financialYearDraft)
-    localStorage.setItem('contractconnect-financial-year', JSON.stringify(financialYearDraft))
+    setSavingYear(true)
+    try { await onSaveFinancialYear(financialYearDraft) }
+    catch (error) { alert(`Financial year could not be saved: ${error.message}`) }
+    finally { setSavingYear(false) }
   }
   const companyValueForPeriod = (companyId, periodStart, periodEnd) => contracts.filter((contract) => {
     if (contract.companyId !== companyId) return false
@@ -303,7 +272,7 @@ function PartnerSaleForm({ partner, companies, onSave, onClose }) {
 }
 
 function PartnerForm({ initial, onSave, onClose }) {
-  const [form, setForm] = useState(initial ? { name: initial.name, productCategory: initial.productCategory, annualTarget: initial.annualTarget, salesAchieved: initial.salesAchieved, owner: initial.owner } : { name: '', productCategory: '', annualTarget: '', salesAchieved: 0, owner: '' })
+  const [form, setForm] = useState(initial ? { name: initial.name, productCategory: initial.productCategory, annualTarget: initial.annualTarget, salesAchieved: initial.openingSales || 0, owner: initial.owner } : { name: '', productCategory: '', annualTarget: '', salesAchieved: 0, owner: '' })
   const change = (event) => setForm({ ...form, [event.target.name]: event.target.value })
   const submit = (event) => {
     event.preventDefault()
@@ -315,43 +284,34 @@ function PartnerForm({ initial, onSave, onClose }) {
   return <form className="form-grid" onSubmit={submit}><label>Partner name<input required name="name" value={form.name} onChange={change} placeholder="Partner organisation" /></label><label>Account owner<input required name="owner" value={form.owner} onChange={change} placeholder="Responsible team member" /></label><label className="full">Product category<input required name="productCategory" value={form.productCategory} onChange={change} placeholder="Products or services covered by the target" /></label><label>Annual sales target (NAD)<input required min="0.01" step="0.01" type="number" name="annualTarget" value={form.annualTarget} onChange={change} /></label><label>Opening sales achieved (NAD)<input required min="0" step="0.01" type="number" name="salesAchieved" value={form.salesAchieved} onChange={change} /><small>Set this to 0 when starting a new financial year.</small></label><div className="form-actions full"><button type="button" className="btn secondary" onClick={onClose}>Cancel</button><button className="btn primary">{initial ? 'Save partner' : 'Add partner'}</button></div></form>
 }
 
-function Partners({ query, canWrite, companies }) {
-  const [partnerTargets, setPartnerTargets] = useState(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem(PARTNER_TARGETS_KEY))
-      return Array.isArray(saved) && saved.length ? saved : demoPartnerTargets
-    } catch { return demoPartnerTargets }
-  })
+function Partners({ query, canWrite, companies, businessData, onRefresh }) {
+  const partnerTargets = businessData.partners
   const [salePartner, setSalePartner] = useState(null)
   const [partnerEditor, setPartnerEditor] = useState(null)
   const [addingPartner, setAddingPartner] = useState(false)
-  const financialYear = (() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem('contractconnect-financial-year'))
-      if (saved?.start && saved?.end) return saved
-    } catch { /* Use the default period below. */ }
-    const year = new Date().getFullYear()
-    return { start: `${year}-01-01`, end: `${year}-12-31` }
-  })()
+  const financialYear = businessData.financialYear
   const partners = partnerTargets.filter((partner) => `${partner.name} ${partner.productCategory} ${partner.owner}`.toLowerCase().includes(query.toLowerCase()))
   const totalTarget = partners.reduce((sum, partner) => sum + partner.annualTarget, 0)
   const totalSales = partners.reduce((sum, partner) => sum + partner.salesAchieved, 0)
   const totalRemaining = Math.max(totalTarget - totalSales, 0)
   const overallProgress = totalTarget ? Math.round(totalSales / totalTarget * 100) : 0
   const salesActivity = partnerTargets.flatMap((partner) => (partner.sales || []).map((sale) => ({ ...sale, partnerId: partner.id, partnerName: partner.name }))).sort((a, b) => `${b.date}${b.createdAt}`.localeCompare(`${a.date}${a.createdAt}`)).slice(0, 6)
-  const recordSale = (sale) => {
-    const updated = partnerTargets.map((partner) => partner.id === salePartner.id ? { ...partner, salesAchieved: Number(partner.salesAchieved) + sale.amount, sales: [...(partner.sales || []), { ...sale, id: crypto.randomUUID(), createdAt: new Date().toISOString() }] } : partner)
-    setPartnerTargets(updated)
-    localStorage.setItem(PARTNER_TARGETS_KEY, JSON.stringify(updated))
-    setSalePartner(null)
+  const recordSale = async (sale) => {
+    try {
+      if (!salePartner.targetId) throw new Error('Set this partner’s target for the active financial year before recording sales.')
+      await recordPartnerSale(salePartner.targetId, sale)
+      await onRefresh()
+      setSalePartner(null)
+    } catch (error) { alert(`Partner sale could not be recorded: ${error.message}`) }
   }
-  const savePartner = (partner) => {
-    const saved = partner.id ? partner : { ...partner, id: crypto.randomUUID(), sales: [] }
-    const updated = partnerTargets.some((item) => item.id === saved.id) ? partnerTargets.map((item) => item.id === saved.id ? { ...item, ...saved } : item) : [...partnerTargets, saved]
-    setPartnerTargets(updated)
-    localStorage.setItem(PARTNER_TARGETS_KEY, JSON.stringify(updated))
-    setPartnerEditor(null)
-    setAddingPartner(false)
+  const savePartner = async (partner) => {
+    if (!financialYear.id) return alert('Set and save the active financial year before adding partner targets.')
+    try {
+      await savePartnerTarget(partner, financialYear.id)
+      await onRefresh()
+      setPartnerEditor(null)
+      setAddingPartner(false)
+    } catch (error) { alert(`Partner target could not be saved: ${error.message}`) }
   }
   return <div className="partners-page">{canWrite && <div className="partner-page-actions"><button className="btn primary" onClick={() => setAddingPartner(true)}><Plus size={16} /> Add partner</button></div>}<section className="partner-summary-grid"><article className="panel"><span className="partner-summary-icon target"><CircleDollarSign size={20} /></span><div><small>Combined annual target</small><strong>{formatMoney(totalTarget)}</strong><span>{formatDate(financialYear.start)} – {formatDate(financialYear.end)}</span></div></article><article className="panel"><span className="partner-summary-icon achieved"><BarChart3 size={20} /></span><div><small>Sales achieved</small><strong>{formatMoney(totalSales)}</strong><span>{overallProgress}% of target</span></div></article><article className="panel"><span className="partner-summary-icon remaining"><Clock3 size={20} /></span><div><small>Remaining to target</small><strong>{formatMoney(totalRemaining)}</strong><span>Across {partners.length} partners</span></div></article></section>
     <section className="panel partner-targets"><div className="panel-head"><div><span className="eyebrow">Partner performance</span><h2>Annual monetary sales targets</h2><p>Monitor product sales against each partner commitment.</p></div><Status>{overallProgress >= 100 ? 'Target achieved' : 'In progress'}</Status></div><div className="table-wrap"><table><thead><tr><th>Partner</th><th>Product category</th><th>Annual target</th><th>Sales achieved</th><th>Remaining</th><th>Progress</th><th>Owner</th><th /></tr></thead><tbody>{partners.map((partner) => {
@@ -401,13 +361,7 @@ function SlaForm({ contracts, companyById, initial, onSave, onClose }) {
   return <form className="form-grid" onSubmit={submit}><label className="full">Related contract<select required name="contractId" value={form.contractId} onChange={change}>{contracts.map((contract) => <option key={contract.id} value={contract.id}>{companyById[contract.companyId]?.name} — {contract.title}</option>)}</select></label><label className="full">SLA title<input required name="title" value={form.title} onChange={change} placeholder="Service level agreement title" /></label><label className="full">Covered service<textarea required name="service" value={form.service} onChange={change} placeholder="Describe the service and obligations covered" /></label><label>Availability target (%)<input required min="0" max="100" step="0.01" type="number" name="availabilityTarget" value={form.availabilityTarget} onChange={change} /></label><label>Initial response (hours)<input required min="0" step="0.5" type="number" name="responseHours" value={form.responseHours} onChange={change} /></label><label>Resolution target (hours)<input required min="0" step="0.5" type="number" name="resolutionHours" value={form.resolutionHours} onChange={change} /></label><label>Review frequency<select name="reviewFrequency" value={form.reviewFrequency} onChange={change}><option>Monthly</option><option>Quarterly</option><option>Biannual</option><option>Annual</option></select></label><label>Start date<input required type="date" name="startDate" value={form.startDate} onChange={change} /></label><label>End date<input required type="date" name="endDate" value={form.endDate} onChange={change} /></label><label>Status<select name="status" value={form.status} onChange={change}><option>Draft</option><option>Active</option><option>Under review</option><option>Expired</option><option>Terminated</option></select></label><div className="form-actions full"><button type="button" className="btn secondary" onClick={onClose}>Cancel</button><button className="btn primary">{initial ? 'Save SLA' : 'Add SLA'}</button></div></form>
 }
 
-function ServiceLevelAgreements({ contracts, companyById, query, canWrite }) {
-  const [slas, setSlas] = useState(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem(SLA_STORAGE_KEY))
-      return Array.isArray(saved) ? saved : demoSlas
-    } catch { return demoSlas }
-  })
+function ServiceLevelAgreements({ contracts, companyById, query, canWrite, slas, onRefresh }) {
   const [editingSla, setEditingSla] = useState(null)
   const [addingSla, setAddingSla] = useState(false)
   const contractById = Object.fromEntries(contracts.map((contract) => [contract.id, contract]))
@@ -416,13 +370,13 @@ function ServiceLevelAgreements({ contracts, companyById, query, canWrite }) {
     const company = companyById[contract?.companyId]
     return `${sla.title} ${sla.service} ${sla.status} ${company?.name} ${contract?.title}`.toLowerCase().includes(query.toLowerCase())
   })
-  const saveSla = (sla) => {
-    const saved = sla.id ? sla : { ...sla, id: crypto.randomUUID(), createdAt: new Date().toISOString() }
-    const updated = slas.some((item) => item.id === saved.id) ? slas.map((item) => item.id === saved.id ? saved : item) : [...slas, saved]
-    setSlas(updated)
-    localStorage.setItem(SLA_STORAGE_KEY, JSON.stringify(updated))
-    setEditingSla(null)
-    setAddingSla(false)
+  const saveSla = async (sla) => {
+    try {
+      await saveServiceLevelAgreement(sla)
+      await onRefresh()
+      setEditingSla(null)
+      setAddingSla(false)
+    } catch (error) { alert(`Service level agreement could not be saved: ${error.message}`) }
   }
   const activeCount = slas.filter((sla) => sla.status === 'Active').length
   const reviewCount = slas.filter((sla) => sla.status === 'Under review').length
@@ -448,7 +402,7 @@ function Documents({ documents, contracts, companyById, query, onOpen, onDelete 
   const contractById = Object.fromEntries(contracts.map((c) => [c.id, c]))
   const filtered = documents.filter((doc) => `${doc.name} ${doc.category} ${contractById[doc.contractId]?.title} ${companyById[contractById[doc.contractId]?.companyId]?.name}`.toLowerCase().includes(query.toLowerCase()))
   const size = (bytes) => bytes < 1024 * 1024 ? `${Math.ceil(bytes / 1024)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`
-  return <section className="panel table-panel"><div className="document-summary"><span><FolderOpen size={20} /></span><div><strong>{documents.length} documents</strong><small>Private Supabase repository</small></div></div><div className="table-wrap"><table><thead><tr><th>Document</th><th>Contract</th><th>Category</th><th>Access</th><th>Version</th><th>Uploaded</th><th /></tr></thead><tbody>{filtered.map((doc) => { const contract = contractById[doc.contractId]; return <tr key={doc.id}><td><div className="contract-name"><FileText size={18} /><div><strong>{doc.name}</strong><small className="cell-sub">{size(doc.fileSize)}</small></div></div></td><td><strong className="cell-main">{contract?.title}</strong><small className="cell-sub">{companyById[contract?.companyId]?.name}</small></td><td><Status>{doc.category}</Status></td><td><Status>{doc.accessLevel}</Status></td><td>v{doc.version}</td><td>{formatDate(doc.createdAt.slice(0, 10))}</td><td><div className="row-actions"><button className="icon-btn" onClick={() => onOpen(doc)} title="Open document"><ExternalLink size={15} /></button><button className="icon-btn danger" onClick={() => onDelete(doc)} title="Delete document"><Trash2 size={15} /></button></div></td></tr> })}</tbody></table></div>{!filtered.length && <Empty title="No documents found" text="Upload an agreement or supporting document." />}</section>
+  return <section className="panel table-panel"><div className="document-summary"><span><FolderOpen size={20} /></span><div><strong>{documents.length} documents</strong><small>ContractConnect repository and read-only SharePoint files</small></div></div><div className="table-wrap"><table><thead><tr><th>Document</th><th>Contract</th><th>Source</th><th>Category</th><th>Access</th><th>Version</th><th>Updated</th><th /></tr></thead><tbody>{filtered.map((doc) => { const contract = contractById[doc.contractId]; const remote = doc.source === 'SharePoint'; return <tr key={doc.id}><td><div className="contract-name"><FileText size={18} /><div><strong>{doc.name}</strong><small className="cell-sub">{size(doc.fileSize)}</small></div></div></td><td><strong className="cell-main">{contract?.title || (remote ? 'SharePoint contract file' : '—')}</strong><small className="cell-sub">{companyById[contract?.companyId]?.name}</small></td><td><Status>{doc.source || 'ContractConnect'}</Status></td><td><Status>{doc.category}</Status></td><td><Status>{doc.accessLevel}</Status></td><td>{remote ? '—' : `v${doc.version}`}</td><td>{formatDate(String(doc.modifiedAt || doc.createdAt).slice(0, 10))}</td><td><div className="row-actions"><button className="icon-btn" onClick={() => onOpen(doc)} title="Open document"><ExternalLink size={15} /></button>{!remote && <button className="icon-btn danger" onClick={() => onDelete(doc)} title="Delete document"><Trash2 size={15} /></button>}</div></td></tr> })}</tbody></table></div>{!filtered.length && <Empty title="No documents found" text="No matching ContractConnect or SharePoint documents were found." />}</section>
 }
 
 function CompanyDetail({ company, data, onBack, openAddInteraction, onEdit, onDelete }) {
@@ -462,7 +416,7 @@ function CompanyDetail({ company, data, onBack, openAddInteraction, onEdit, onDe
       <section className="panel detail-section"><div className="panel-head"><h2>Contracts</h2><span className="count">{contracts.length}</span></div>{contracts.map((contract) => <div className="contract-card" key={contract.id}><div><FileText size={17} /><strong>{contract.title}</strong></div><Status>{contractStatus(contract)}</Status><p>{formatDate(contract.startDate)} — {formatDate(contract.endDate)} · {contract.autoRenew ? 'Auto-renews' : `${contract.renewalNoticeDays || 60}-day notice`}</p><b>{formatMoney(contract.value)}</b></div>)}</section></aside></div></>
 }
 
-function AccountSettings({ profile, email, userId, theme, onThemeChange, onUpdated }) {
+function AccountSettings({ profile, email, userId, theme, outlook, onOutlookChanged, onThemeChange, onUpdated }) {
   const stockAvatars = ['/avatars/avatar-1.jpg?v=2', '/avatars/avatar-2.jpg?v=2', '/avatars/avatar-3.jpg?v=2', '/avatars/avatar-4.jpg?v=2', '/avatars/avatar-5.jpg?v=2']
   const [form, setForm] = useState({ fullName: profile.full_name, email, password: '', confirm: '', avatarUrl: profile.avatar_url || '' })
   const [saving, setSaving] = useState(false)
@@ -471,7 +425,9 @@ function AccountSettings({ profile, email, userId, theme, onThemeChange, onUpdat
   const [error, setError] = useState('')
   const [identities, setIdentities] = useState([])
   const [unlinking, setUnlinking] = useState(false)
-  const [outlookPreferences, setOutlookPreferences] = useState(() => loadOutlookPreferences(userId))
+  const [outlookPreferences, setOutlookPreferences] = useState(outlook)
+  const [outlookBusy, setOutlookBusy] = useState(false)
+  useEffect(() => setOutlookPreferences(outlook), [outlook])
   useEffect(() => { getLinkedIdentities().then(setIdentities).catch((err) => setError(err.message)) }, [])
   const submit = async (event) => {
     event.preventDefault(); setError(''); setMessage('')
@@ -501,16 +457,18 @@ function AccountSettings({ profile, email, userId, theme, onThemeChange, onUpdat
     catch (err) { setError(err.message || 'Microsoft could not be unlinked.') }
     finally { setUnlinking(false) }
   }
-  const saveOutlookConnection = () => {
-    if (!outlookPreferences.email && !outlookPreferences.calendar) return
-    const updated = { ...outlookPreferences, connected: true }
-    setOutlookPreferences(updated)
-    localStorage.setItem(outlookConnectionKey(userId), JSON.stringify(updated))
+  const saveOutlookConnection = async () => {
+    if (!outlookPreferences.email && !outlookPreferences.calendar && !outlookPreferences.sharepoint) return
+    setOutlookBusy(true); setError(''); setMessage('')
+    try { await beginOutlookConnection(outlookPreferences) }
+    catch (err) { setError(err.message || 'Microsoft authorization could not start.'); setOutlookBusy(false) }
   }
-  const disconnectOutlook = () => {
-    const updated = { connected: false, email: outlookPreferences.email, calendar: outlookPreferences.calendar }
-    setOutlookPreferences(updated)
-    localStorage.removeItem(outlookConnectionKey(userId))
+  const disconnectOutlook = async () => {
+    if (!confirm('Disconnect Outlook and remove ContractConnect’s stored Microsoft credentials?')) return
+    setOutlookBusy(true); setError(''); setMessage('')
+    try { await disconnectOutlookAccount(); await onOutlookChanged(); setMessage('Microsoft Outlook has been disconnected from ContractConnect.') }
+    catch (err) { setError(err.message || 'Outlook could not be disconnected.') }
+    finally { setOutlookBusy(false) }
   }
   return <div className="settings-grid">
     <section className="panel settings-card"><div className="settings-intro"><Avatar name={profile.full_name} color="#d9a451" src={form.avatarUrl} /><div><h2>Personal information</h2><p>Update how your profile appears across ContractConnect.</p></div></div><form className="settings-form" onSubmit={submit}>
@@ -524,7 +482,7 @@ function AccountSettings({ profile, email, userId, theme, onThemeChange, onUpdat
       <button className="btn primary settings-save" disabled={saving}>{saving ? 'Saving…' : 'Save changes'}</button>
     </form></section>
     <aside className="settings-aside"><section className="panel appearance-card"><span className="settings-icon"><Sun size={21} /></span><h2>Appearance</h2><p>Choose how ContractConnect looks on this device.</p><div className="theme-options"><button className={theme === 'light' ? 'active' : ''} onClick={() => onThemeChange('light')}><Sun size={17} /><span><strong>Light</strong><small>Bright workspace</small></span></button><button className={theme === 'dark' ? 'active' : ''} onClick={() => onThemeChange('dark')}><Moon size={17} /><span><strong>Dark</strong><small>Reduced glare</small></span></button></div></section><section className="panel security-card"><span><ShieldCheck size={22} /></span><h2>Secure account</h2><p>Your account is protected by Supabase authentication, encrypted sessions, and row-level database security.</p><dl><div><dt>Access level</dt><dd>{profile.role}</dd></div><div><dt>Session</dt><dd className="secure-value">Active</dd></div></dl><div className="linked-identities"><strong>Linked sign-in methods</strong>{identities.map((identity) => <div className="identity-row" key={identity.id}><span>{identity.provider === 'azure' ? 'Microsoft' : identity.provider === 'email' ? 'Email and password' : identity.provider}</span>{identity.provider === 'azure' && identities.length > 1 && <button type="button" onClick={unlinkMicrosoft} disabled={unlinking}>{unlinking ? 'Unlinking…' : 'Unlink'}</button>}</div>)}</div></section></aside>
-    <section className="panel integrations-card"><div className="panel-head"><div><span className="eyebrow">Optional connections</span><h2>Integrations</h2><p>Connect services to bring relevant activity into your workspace.</p></div></div><article className="integration-row"><span className="microsoft-integration-icon" aria-hidden="true"><i /><i /><i /><i /></span><div><strong>Microsoft Outlook</strong><p>Choose which parts of Outlook you want ContractConnect to access.</p><div className="outlook-options"><label><input type="checkbox" checked={outlookPreferences.email} onChange={(e) => setOutlookPreferences((current) => ({ ...current, email: e.target.checked }))} /> Outlook email</label><label><input type="checkbox" checked={outlookPreferences.calendar} onChange={(e) => setOutlookPreferences((current) => ({ ...current, calendar: e.target.checked }))} /> Outlook calendar</label></div><small>{outlookPreferences.connected ? `Connected for this user · ${[outlookPreferences.email && 'Email', outlookPreferences.calendar && 'Calendar'].filter(Boolean).join(' and ')}` : 'Optional · Microsoft will request only the permissions selected here'}</small></div><div className="integration-actions"><button className="btn primary" disabled={!outlookPreferences.email && !outlookPreferences.calendar} onClick={saveOutlookConnection}>{outlookPreferences.connected ? 'Update connection' : <><ExternalLink size={14} /> Connect</>}</button>{outlookPreferences.connected && <button className="text-btn" onClick={disconnectOutlook}>Disconnect</button>}</div><ChevronDown size={17} /></article></section>
+    <section className="panel integrations-card"><div className="panel-head"><div><span className="eyebrow">Optional connections</span><h2>Integrations</h2><p>Connect services to bring relevant activity into your workspace.</p></div></div><article className="integration-row"><span className="microsoft-integration-icon" aria-hidden="true"><i /><i /><i /><i /></span><div><strong>Microsoft 365</strong><p>Choose which Microsoft services ContractConnect may read.</p><div className="outlook-options"><label><input type="checkbox" disabled={outlookBusy} checked={outlookPreferences.email} onChange={(e) => setOutlookPreferences((current) => ({ ...current, email: e.target.checked }))} /> Outlook email</label><label><input type="checkbox" disabled={outlookBusy} checked={outlookPreferences.calendar} onChange={(e) => setOutlookPreferences((current) => ({ ...current, calendar: e.target.checked }))} /> Outlook calendar</label><label><input type="checkbox" disabled={outlookBusy} checked={Boolean(outlookPreferences.sharepoint)} onChange={(e) => setOutlookPreferences((current) => ({ ...current, sharepoint: e.target.checked }))} /> SharePoint contracts</label></div><small>{outlookPreferences.connected ? `Connected as ${outlookPreferences.accountEmail || 'Microsoft user'} · ${[outlookPreferences.email && 'Email', outlookPreferences.calendar && 'Calendar', outlookPreferences.sharepoint && 'SharePoint'].filter(Boolean).join(', ')}` : outlookPreferences.status === 'error' ? `Connection needs attention${outlookPreferences.error ? ` · ${outlookPreferences.error}` : ''}` : 'Optional · Microsoft will request only the permissions selected here'}</small></div><div className="integration-actions"><button className="btn primary" disabled={outlookBusy || (!outlookPreferences.email && !outlookPreferences.calendar && !outlookPreferences.sharepoint)} onClick={saveOutlookConnection}>{outlookBusy ? 'Please wait…' : outlookPreferences.connected ? 'Update permissions' : <><ExternalLink size={14} /> Connect</>}</button>{outlookPreferences.connected && <button className="text-btn" disabled={outlookBusy} onClick={disconnectOutlook}>Disconnect</button>}</div><ChevronDown size={17} /></article></section>
   </div>
 }
 
@@ -544,8 +502,8 @@ function DataManagement({ data, companyById, contactById }) {
     { name: 'Interactions', count: data.interactions.length, headers: ['company', 'contact', 'type', 'date', 'summary', 'notes'], rows: data.interactions.map((i) => [companyById[i.companyId]?.name, contactById[i.contactId]?.name, i.type, i.date, i.summary, i.notes]) },
     { name: 'Follow-ups', count: data.followups.length, headers: ['company', 'contact', 'title', 'due_date', 'priority', 'completed'], rows: data.followups.map((f) => [companyById[f.companyId]?.name, contactById[f.contactId]?.name, f.title, f.dueDate, f.priority, f.completed]) },
   ]
-  return <div className="data-page"><section className="data-notice"><span><Database size={20} /></span><div><strong>Demo-data workspace</strong><p>Exports currently contain fictional demonstration records only. Importing real information remains disabled until organisational approval is received.</p></div></section>
-    <section className="panel data-section"><div className="panel-head"><div><span className="eyebrow">Current workspace</span><h2>Export demo data</h2></div></div><div className="export-grid">{exports.map((item) => <article className="export-card" key={item.name}><span><FileSpreadsheet size={20} /></span><div><strong>{item.name}</strong><small>{item.count} records · CSV format</small></div><button className="icon-btn" onClick={() => downloadCsv(`contractconnect-${item.name.toLowerCase().replace(' ', '-')}.csv`, item.headers, item.rows)} aria-label={`Export ${item.name}`}><Download size={17} /></button></article>)}</div></section>
+  return <div className="data-page"><section className="data-notice"><span><Database size={20} /></span><div><strong>Production data workspace</strong><p>Exports contain the records currently stored in this ContractConnect environment. Handle exported files according to your organisation’s data-classification policy.</p></div></section>
+    <section className="panel data-section"><div className="panel-head"><div><span className="eyebrow">Current workspace</span><h2>Export workspace data</h2></div></div><div className="export-grid">{exports.map((item) => <article className="export-card" key={item.name}><span><FileSpreadsheet size={20} /></span><div><strong>{item.name}</strong><small>{item.count} records · CSV format</small></div><button className="icon-btn" onClick={() => downloadCsv(`contractconnect-${item.name.toLowerCase().replace(' ', '-')}.csv`, item.headers, item.rows)} aria-label={`Export ${item.name}`}><Download size={17} /></button></article>)}</div></section>
     <section className="panel data-section"><div className="panel-head"><div><span className="eyebrow">Future migration</span><h2>Download import templates</h2></div></div><div className="template-row"><div><strong>ContractConnect CSV template pack</strong><p>Blank, correctly structured templates for preparing approved data offline. No information is uploaded by this action.</p></div><button className="btn secondary" onClick={() => exports.forEach((item, index) => setTimeout(() => downloadCsv(`template-${item.name.toLowerCase().replace(' ', '-')}.csv`, item.headers, []), index * 150))}><Download size={16} /> Download templates</button></div></section>
   </div>
 }
@@ -589,8 +547,23 @@ function Governance({ currentUserId, canAdminister }) {
 }
 
 function CrmApp({ session, profile, theme, onThemeChange, onProfileUpdated, onSignOut }) {
-  const [data, setData] = useState(loadData)
-  const [view, setView] = useState('dashboard')
+  const [data, setData] = useState(emptyCrmData)
+  const currentYear = new Date().getFullYear()
+  const [businessData, setBusinessData] = useState({ financialYear: { id: null, start: `${currentYear}-01-01`, end: `${currentYear}-12-31` }, partners: [], slas: [], readNotificationIds: [] })
+  const [outlook, setOutlook] = useState({ connected: false, status: 'disconnected', email: false, calendar: false, sharepoint: false, accountEmail: '', error: '' })
+  const [weeklyMeetings, setWeeklyMeetings] = useState([])
+  const [meetingsLoading, setMeetingsLoading] = useState(false)
+  const [meetingsError, setMeetingsError] = useState('')
+  const [meetingsLastUpdated, setMeetingsLastUpdated] = useState(null)
+  const calendarRefreshInFlight = useRef(false)
+  const calendarRetryAt = useRef(0)
+  const [outlookEmails, setOutlookEmails] = useState([])
+  const [emailsLoading, setEmailsLoading] = useState(false)
+  const [emailsError, setEmailsError] = useState('')
+  const [emailsLastUpdated, setEmailsLastUpdated] = useState(null)
+  const emailRefreshInFlight = useRef(false)
+  const emailRetryAt = useRef(0)
+  const [view, setView] = useState(() => new URLSearchParams(window.location.search).get('view') || 'dashboard')
   const [query, setQuery] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
   const [selectedCompany, setSelectedCompany] = useState(null)
@@ -599,21 +572,19 @@ function CrmApp({ session, profile, theme, onThemeChange, onProfileUpdated, onSi
   const [mobileNav, setMobileNav] = useState(false)
   const [openNavGroups, setOpenNavGroups] = useState({ companies: true, contracts: false })
   const [documents, setDocuments] = useState([])
+  const [sharePointDocuments, setSharePointDocuments] = useState([])
+  const [sharePointLoading, setSharePointLoading] = useState(false)
+  const [sharePointError, setSharePointError] = useState('')
   const [profileMenu, setProfileMenu] = useState(false)
   const [notificationOpen, setNotificationOpen] = useState(false)
-  const [readNotifications, setReadNotifications] = useState(() => new Set(JSON.parse(localStorage.getItem(`contractconnect-read-notifications-${session.user.id}`) || '[]')))
+  const [readNotifications, setReadNotifications] = useState(new Set())
   const [syncState, setSyncState] = useState(isSupabaseConfigured ? 'connecting' : 'local')
-  useEffect(() => {
-    if (!isSupabaseConfigured || demoMode) localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
-  }, [data])
   useEffect(() => {
     let active = true
     if (!isSupabaseConfigured) return undefined
     fetchCrmData().then(async (remoteData) => {
       if (!active) return
-      const needsDemoSeed = demoMode && !remoteData?.companies.length && !remoteData?.contacts.length && !remoteData?.contracts.length && !remoteData?.interactions.length && !remoteData?.followups.length
-      const resolved = needsDemoSeed ? await seedDemoData() : remoteData
-      if (active && resolved) setData(resolved)
+      if (active && remoteData) setData(remoteData)
       setSyncState('connected')
     }).catch((error) => {
       console.error('Supabase connection failed:', error.message)
@@ -622,14 +593,130 @@ function CrmApp({ session, profile, theme, onThemeChange, onProfileUpdated, onSi
     return () => { active = false }
   }, [session.user.id])
   useEffect(() => { fetchDocuments().then(setDocuments).catch((error) => console.warn('Document repository unavailable:', error.message)) }, [session.user.id])
+  const refreshOutlookCalendar = async (status = outlook) => {
+    if (!status.connected || !status.calendar || calendarRefreshInFlight.current) return
+    if (Date.now() < calendarRetryAt.current) {
+      const waitSeconds = Math.ceil((calendarRetryAt.current - Date.now()) / 1000)
+      setMeetingsError(`Microsoft is temporarily limiting requests. Try again in ${waitSeconds} seconds.`)
+      return
+    }
+    calendarRefreshInFlight.current = true
+    setMeetingsLoading(true); setMeetingsError('')
+    try {
+      const start = new Date(); start.setHours(0, 0, 0, 0); start.setDate(start.getDate() - ((start.getDay() + 6) % 7))
+      const end = new Date(start); end.setDate(end.getDate() + 7)
+      setWeeklyMeetings(await fetchOutlookCalendar(start, end))
+      setMeetingsLastUpdated(new Date())
+      calendarRetryAt.current = 0
+    } catch (error) {
+      if (error.retryAfterSeconds) calendarRetryAt.current = Date.now() + error.retryAfterSeconds * 1000
+      setMeetingsError(error.message || 'Microsoft calendar could not be loaded.')
+    } finally { calendarRefreshInFlight.current = false; setMeetingsLoading(false) }
+  }
+  const reloadOutlook = async () => {
+    const status = await getOutlookStatus()
+    setOutlook(status)
+    if (!status.connected || !status.calendar) { setWeeklyMeetings([]); setMeetingsLastUpdated(null) }
+    if (!status.connected || !status.email) { setOutlookEmails([]); setEmailsLastUpdated(null) }
+    if (!status.connected || !status.sharepoint) setSharePointDocuments([])
+    await Promise.all([refreshOutlookCalendar(status), refreshOutlookEmails(status)])
+    return status
+  }
+  const refreshOutlookEmails = async (status = outlook) => {
+    if (!status.connected || !status.email || emailRefreshInFlight.current) return
+    if (Date.now() < emailRetryAt.current) {
+      const waitSeconds = Math.ceil((emailRetryAt.current - Date.now()) / 1000)
+      setEmailsError(`Microsoft is temporarily limiting requests. Try again in ${waitSeconds} seconds.`)
+      return
+    }
+    emailRefreshInFlight.current = true
+    setEmailsLoading(true); setEmailsError('')
+    try {
+      setOutlookEmails(await fetchOutlookEmail())
+      setEmailsLastUpdated(new Date())
+      emailRetryAt.current = 0
+    } catch (error) {
+      if (error.retryAfterSeconds) emailRetryAt.current = Date.now() + error.retryAfterSeconds * 1000
+      setEmailsError(error.message || 'Microsoft email could not be loaded.')
+    } finally { emailRefreshInFlight.current = false; setEmailsLoading(false) }
+  }
+  const refreshSharePoint = async (status = outlook) => {
+    if (!status.connected || !status.sharepoint || sharePointLoading) return
+    setSharePointLoading(true); setSharePointError('')
+    try { setSharePointDocuments(await fetchSharePointDocuments()) }
+    catch (error) { setSharePointError(error.message || 'SharePoint documents could not be loaded.') }
+    finally { setSharePointLoading(false) }
+  }
+  useEffect(() => {
+    reloadOutlook().catch((error) => setMeetingsError(error.message || 'Outlook connection status is unavailable.'))
+    const url = new URL(window.location.href)
+    if (url.searchParams.has('outlook')) { url.searchParams.delete('outlook'); window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`) }
+  }, [session.user.id])
+  useEffect(() => {
+    if (view !== 'dashboard' || !outlook.connected || !outlook.calendar) return undefined
+    const refreshIfStale = () => {
+      if (document.visibilityState !== 'visible') return
+      if (!meetingsLastUpdated || Date.now() - meetingsLastUpdated.getTime() >= 2 * 60 * 1000) refreshOutlookCalendar(outlook)
+    }
+    refreshIfStale()
+    const interval = window.setInterval(refreshIfStale, 5 * 60 * 1000)
+    document.addEventListener('visibilitychange', refreshIfStale)
+    window.addEventListener('focus', refreshIfStale)
+    return () => {
+      window.clearInterval(interval)
+      document.removeEventListener('visibilitychange', refreshIfStale)
+      window.removeEventListener('focus', refreshIfStale)
+    }
+  }, [view, outlook.connected, outlook.calendar, meetingsLastUpdated])
+  useEffect(() => {
+    if (view !== 'dashboard' || !outlook.connected || !outlook.email) return undefined
+    const refreshIfStale = () => {
+      if (document.visibilityState !== 'visible') return
+      if (!emailsLastUpdated || Date.now() - emailsLastUpdated.getTime() >= 2 * 60 * 1000) refreshOutlookEmails(outlook)
+    }
+    refreshIfStale()
+    const interval = window.setInterval(refreshIfStale, 5 * 60 * 1000)
+    document.addEventListener('visibilitychange', refreshIfStale)
+    window.addEventListener('focus', refreshIfStale)
+    return () => {
+      window.clearInterval(interval)
+      document.removeEventListener('visibilitychange', refreshIfStale)
+      window.removeEventListener('focus', refreshIfStale)
+    }
+  }, [view, outlook.connected, outlook.email, emailsLastUpdated])
+  useEffect(() => {
+    if (view === 'documents' && outlook.connected && outlook.sharepoint) refreshSharePoint(outlook)
+  }, [view, outlook.connected, outlook.sharepoint])
+  const reloadBusinessData = async () => {
+    const result = await fetchBusinessData(session.user.id)
+    setBusinessData(result)
+    setReadNotifications(new Set(result.readNotificationIds))
+    return result
+  }
+  useEffect(() => {
+    if (!isSupabaseConfigured) return
+    reloadBusinessData().catch((error) => {
+      console.error('Production business data unavailable:', error.message)
+      setSyncState('error')
+    })
+  }, [session.user.id])
   const companyById = useMemo(() => Object.fromEntries(data.companies.map((c) => [c.id, c])), [data.companies])
   const contactById = useMemo(() => Object.fromEntries(data.contacts.map((c) => [c.id, c])), [data.contacts])
+  const visibleDocuments = useMemo(() => [...sharePointDocuments, ...documents], [sharePointDocuments, documents])
   const reminderNotifications = (data.followups || []).filter((item) => !item.completed && (!item.assignedTo || item.assignedTo === session.user.id) && item.dueDate <= addDays(today, 3)).sort((a, b) => a.dueDate.localeCompare(b.dueDate))
   const unreadNotificationCount = reminderNotifications.filter((item) => !readNotifications.has(item.id)).length
-  const markNotificationsRead = () => {
+  const markNotificationsRead = async () => {
     const next = new Set([...readNotifications, ...reminderNotifications.map((item) => item.id)])
     setReadNotifications(next)
-    localStorage.setItem(`contractconnect-read-notifications-${session.user.id}`, JSON.stringify([...next]))
+    try { await persistNotificationReads(session.user.id, reminderNotifications.map((item) => item.id)) }
+    catch (error) {
+      setReadNotifications(readNotifications)
+      console.error('Notification state could not be saved:', error.message)
+    }
+  }
+  const updateFinancialYear = async ({ start, end }) => {
+    await persistFinancialYear(start, end)
+    await reloadBusinessData()
   }
   const openCompany = (id) => { setSelectedCompany(id); setView('company'); setSearchOpen(false) }
   const navigate = (id) => { setView(id); setSelectedCompany(null); setQuery(''); setSearchOpen(false); setMobileNav(false); setProfileMenu(false) }
@@ -683,32 +770,29 @@ function CrmApp({ session, profile, theme, onThemeChange, onProfileUpdated, onSi
   const toggleFollowup = (item) => saveEntity('followups', { ...item, completed: !item.completed })
   const addDocument = async (form) => { try { const saved = await uploadContractDocument(form); setDocuments((current) => [saved, ...current]); setModal(null) } catch (error) { alert(`Document could not be uploaded: ${error.message}`) } }
   const removeDocument = async (document) => { if (!confirm(`Delete “${document.name}”? This removes the stored file.`)) return; try { await deleteContractDocument(document); setDocuments((current) => current.filter((item) => item.id !== document.id)) } catch (error) { alert(`Document could not be deleted: ${error.message}`) } }
-  const reset = async () => {
-    if (!confirm('Reset all ContractConnect data to the original demo records? This removes any demo changes.')) return
-    try { setData(await resetDemoData()) }
-    catch (error) { alert(`Demo data could not be reset: ${error.message}`) }
-  }
   const activeTitle = titles[view] || titles.companies
   const openFollowupCount = (data.followups || []).filter((item) => !item.completed).length
   const canWrite = profile.role !== 'Read-only'
   const canAdminister = profile.role === 'Administrator'
   const canManage = ['Administrator', 'Manager'].includes(profile.role)
+  const reset = () => {}
 
   return <div className={`app-shell ${canWrite ? '' : 'read-only'}`}>
     <aside className={`sidebar ${mobileNav ? 'open' : ''}`}><div className="brand"><span className="brand-mark"><FileText size={20} /></span><span>Contract<span>Connect</span></span><button className="nav-close" onClick={() => setMobileNav(false)}><X /></button></div><nav>{navItems.map(({ id, label, icon: Icon, children }) => { const groupOpen = Boolean(openNavGroups[id]); const groupActive = children?.some((child) => child.id === view) || (id === 'companies' && view === 'company'); return children ? <div className={`nav-group ${groupOpen ? 'open' : ''}`} key={id}><button className={groupActive ? 'active' : ''} onClick={() => setOpenNavGroups((current) => ({ ...current, [id]: !current[id] }))} aria-expanded={groupOpen}><Icon size={19} /><span>{label}</span><ChevronDown className="nav-chevron" size={16} /></button>{groupOpen && <div className="nav-children">{children.map((child) => <button key={child.id} className={view === child.id || (view === 'company' && child.id === 'companies') ? 'active' : ''} onClick={() => navigate(child.id)}><span>{child.label}</span></button>)}</div>}</div> : <button key={id} className={view === id ? 'active' : ''} onClick={() => navigate(id)}><Icon size={19} /><span>{label}</span>{id === 'followups' && openFollowupCount > 0 && <b className="nav-badge">{openFollowupCount}</b>}</button> })}</nav><div className="sidebar-bottom"><div className="powered-by"><span>Powered by:</span><img src="/schoemans-digital-solutions-logo.jpg" alt="Schoemans Digital Solutions" /></div><div className={`sync-state ${syncState}`}><span />{syncState === 'connected' ? 'Supabase connected' : syncState === 'connecting' ? 'Connecting to Supabase…' : syncState === 'error' ? 'Supabase unavailable' : 'Local demo mode'}</div>{demoMode && canManage && <button onClick={reset}><RefreshCcw size={17} /> Reset demo data</button>}<div className="profile-menu-wrap">{profileMenu && <div className="profile-menu"><button onClick={() => navigate('settings')}><Settings size={16} /><span><strong>Account settings</strong><small>Profile and security</small></span></button><button onClick={() => navigate('data')}><Database size={16} /><span><strong>Data management</strong><small>Exports and templates</small></span></button>{canManage && <button onClick={() => navigate('governance')}><ShieldCheck size={16} /><span><strong>Governance</strong><small>Roles and audit trail</small></span></button>}<button className="profile-signout" onClick={onSignOut}><LogOut size={16} /><span><strong>Sign out</strong><small>End this session</small></span></button></div>}<div className={`user-card ${profileMenu ? 'menu-open' : ''}`}><Avatar name={profile.full_name} color="#d9a451" src={profile.avatar_url} /><div><strong>{profile.full_name}</strong><small>{profile.role}</small></div><button className="profile-menu-trigger" onClick={() => setProfileMenu((open) => !open)} aria-label="Open account menu" aria-expanded={profileMenu}><MoreHorizontal size={19} /></button></div></div></div></aside>
     {mobileNav && <div className="nav-scrim" onClick={() => setMobileNav(false)} />}
     <main><header className="topbar"><button className="mobile-menu" onClick={() => setMobileNav(true)}><Menu /></button><div className="global-search"><Search size={18} /><input value={query} onFocus={() => setSearchOpen(true)} onChange={(e) => { setQuery(e.target.value); setSearchOpen(true) }} placeholder="Search companies, contacts, contracts…" /><kbd>⌘ K</kbd>{searchOpen && <GlobalSearchResults query={query} data={data} documents={documents} companyById={companyById} onNavigate={navigate} onCompany={openCompany} />}</div><div className="notification-wrap"><button className="notification-trigger" onClick={() => { setNotificationOpen((open) => !open); setSearchOpen(false) }} aria-label={`${unreadNotificationCount} unread reminders`}><Bell size={19} />{unreadNotificationCount > 0 && <b>{unreadNotificationCount}</b>}</button>{notificationOpen && <section className="notification-menu"><div><span><strong>Follow-up reminders</strong><small>{reminderNotifications.length} due or coming up</small></span>{unreadNotificationCount > 0 && <button onClick={markNotificationsRead}>Mark all read</button>}</div>{reminderNotifications.map((item) => { const overdue = item.dueDate < today; return <button className={readNotifications.has(item.id) ? 'read' : ''} key={item.id} onClick={() => { markNotificationsRead(); setNotificationOpen(false); navigate('followups') }}><span className={overdue ? 'overdue' : ''}><Bell size={14} /></span><div><strong>{item.title}</strong><small>{companyById[item.companyId]?.name} · {overdue ? `Overdue since ${formatDate(item.dueDate)}` : `Due ${formatDate(item.dueDate)}`}</small></div></button> })}{!reminderNotifications.length && <div className="notification-empty"><Check size={18} /><span><strong>You’re up to date</strong><small>No follow-ups are due in the next three days.</small></span></div>}</section>}</div><button className="top-avatar" title={profile.full_name}><Avatar name={profile.full_name} color="#d9a451" src={profile.avatar_url} /></button></header>
       <div className="content">{view !== 'company' && view !== 'dashboard' && <div className="page-heading"><div><span className="eyebrow">ContractConnect CRM</span><h1>{activeTitle[0]}</h1><p>{activeTitle[1]}</p></div>{canWrite && !['settings', 'data', 'reports', 'governance', 'partners', 'slas'].includes(view) && <button className="btn primary" onClick={() => openCreate(view === 'companies' ? 'company' : view === 'contacts' ? 'contact' : view === 'contracts' ? 'contract' : view === 'documents' ? 'document' : view === 'followups' ? 'followup' : 'interaction')}><Plus size={17} /> {view === 'companies' ? 'Add company' : view === 'contacts' ? 'Add contact' : view === 'contracts' ? 'Add contract' : view === 'documents' ? 'Upload document' : view === 'followups' ? 'Add follow-up' : 'Log interaction'}</button>}</div>}
-        {view === 'dashboard' && <Dashboard data={data} companyById={companyById} userName={profile.full_name} userId={session.user.id} setView={setView} openCompany={openCompany} openAddInteraction={() => openCreate('interaction')} openAddFollowup={() => openCreate('followup')} onToggleFollowup={toggleFollowup} />}
-        {view === 'companies' && <Companies {...data} query={query} openCompany={openCompany} />}
-        {view === 'partners' && <Partners query={query} canWrite={canWrite} companies={data.companies} />}
+        {view === 'dashboard' && <Dashboard data={data} companyById={companyById} userName={profile.full_name} outlook={outlook} weeklyMeetings={weeklyMeetings} meetingsLoading={meetingsLoading} meetingsError={meetingsError} meetingsLastUpdated={meetingsLastUpdated} onRefreshMeetings={() => refreshOutlookCalendar(outlook)} setView={setView} openCompany={openCompany} openAddInteraction={() => openCreate('interaction')} openAddFollowup={() => openCreate('followup')} onToggleFollowup={toggleFollowup} />}
+        {view === 'dashboard' && <OutlookEmailPanel outlook={outlook} messages={outlookEmails} loading={emailsLoading} error={emailsError} lastUpdated={emailsLastUpdated} onRefresh={() => refreshOutlookEmails(outlook)} onOpenSettings={() => setView('settings')} />}
+        {view === 'companies' && <Companies {...data} query={query} openCompany={openCompany} financialYear={businessData.financialYear} onSaveFinancialYear={updateFinancialYear} />}
+        {view === 'partners' && <Partners query={query} canWrite={canWrite} companies={data.companies} businessData={businessData} onRefresh={reloadBusinessData} />}
         {view === 'contacts' && <Contacts data={data} companyById={companyById} query={query} onEdit={(item) => openEdit('contact', item)} onDelete={removeEntity} />}
         {view === 'contracts' && <Contracts data={data} companyById={companyById} query={query} onEdit={(item) => openEdit('contract', item)} onDelete={removeEntity} />}
-        {view === 'slas' && <ServiceLevelAgreements contracts={data.contracts} companyById={companyById} query={query} canWrite={canWrite} />}
-        {view === 'documents' && <Documents documents={documents} contracts={data.contracts} companyById={companyById} query={query} onOpen={(doc) => openContractDocument(doc).catch((error) => alert(error.message))} onDelete={removeDocument} />}
+        {view === 'slas' && <ServiceLevelAgreements contracts={data.contracts} companyById={companyById} query={query} canWrite={canWrite} slas={businessData.slas} onRefresh={reloadBusinessData} />}
+        {view === 'documents' && <>{outlook.sharepoint && <div className="calendar-refresh-actions"><span className="calendar-connected"><span /> SharePoint read-only</span><button className="btn secondary" disabled={sharePointLoading} onClick={() => refreshSharePoint(outlook)}><RefreshCcw size={14} className={sharePointLoading ? 'spin' : ''} /> {sharePointLoading ? 'Refreshing…' : 'Refresh SharePoint'}</button></div>}{sharePointError && <div className="calendar-sync-warning" role="status"><strong>SharePoint refresh failed.</strong> {sharePointError}</div>}<Documents documents={visibleDocuments} contracts={data.contracts} companyById={companyById} query={query} onOpen={(doc) => doc.source === 'SharePoint' ? window.open(doc.webUrl, '_blank', 'noopener,noreferrer') : openContractDocument(doc).catch((error) => alert(error.message))} onDelete={removeDocument} /></>}
         {view === 'interactions' && <Interactions data={data} companyById={companyById} contactById={contactById} query={query} onEdit={(item) => openEdit('interaction', item)} onDelete={removeEntity} />}
         {view === 'followups' && <Followups data={data} companyById={companyById} contactById={contactById} query={query} onToggle={toggleFollowup} onEdit={(item) => openEdit('followup', item)} onDelete={removeEntity} />}
-        {view === 'settings' && <AccountSettings profile={profile} email={session.user.email} userId={session.user.id} theme={theme} onThemeChange={onThemeChange} onUpdated={onProfileUpdated} />}
+        {view === 'settings' && <AccountSettings profile={profile} email={session.user.email} userId={session.user.id} theme={theme} outlook={outlook} onOutlookChanged={reloadOutlook} onThemeChange={onThemeChange} onUpdated={onProfileUpdated} />}
         {view === 'data' && <DataManagement data={data} companyById={companyById} contactById={contactById} />}
         {view === 'reports' && <Reports data={data} companyById={companyById} />}
         {view === 'governance' && canManage && <Governance currentUserId={session.user.id} canAdminister={canAdminister} />}

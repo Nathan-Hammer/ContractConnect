@@ -1,5 +1,4 @@
 import { supabase, isSupabaseConfigured } from './supabase'
-import { seedData } from '../data'
 
 const toCompany = (row) => ({
   id: row.id, name: row.name, industry: row.industry, location: row.location,
@@ -61,31 +60,6 @@ export async function fetchCrmData() {
     interactions: interactions.data.map(toInteraction),
     followups: followups.data.map(toFollowup),
   }
-}
-
-export async function seedDemoData() {
-  if (!isSupabaseConfigured) return seedData
-  const operations = [
-    ['companies', seedData.companies.map(fromCompany)],
-    ['contacts', seedData.contacts.map(fromContact)],
-    ['contracts', seedData.contracts.map(fromContract)],
-    ['interactions', seedData.interactions.map(fromInteraction)],
-    ['followups', seedData.followups.map(fromFollowup)],
-  ]
-  for (const [table, rows] of operations) {
-    const { error } = await supabase.from(table).upsert(rows, { onConflict: 'id', ignoreDuplicates: true })
-    if (error) throw error
-  }
-  return fetchCrmData()
-}
-
-export async function resetDemoData() {
-  if (!isSupabaseConfigured) return seedData
-  for (const table of ['followups', 'interactions', 'contracts', 'contacts', 'companies']) {
-    const { error } = await supabase.from(table).delete().neq('id', '')
-    if (error) throw error
-  }
-  return seedDemoData()
 }
 
 export async function saveRecord(kind, item) {

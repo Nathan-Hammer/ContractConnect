@@ -1,7 +1,6 @@
 import { isSupabaseConfigured, supabase } from './supabase'
 
 const isProduction = import.meta.env.PROD
-export const demoMode = String(import.meta.env.VITE_DEMO_MODE || '').toLowerCase() === 'true'
 export const allowPublicSignup = String(import.meta.env.VITE_ALLOW_PUBLIC_SIGNUP || '').toLowerCase() === 'true'
 
 const SENSITIVE_STORAGE_KEYS = ['contractconnect-data-v1', 'contractconnect-company-view']
@@ -42,13 +41,12 @@ export function clearSensitiveClientData() {
 function assertSecureRuntimeConfiguration() {
   if (!isProduction) return
   if (!isSupabaseConfigured) throw new Error('Production requires a configured Supabase connection.')
-  if (demoMode) throw new Error('Demo mode must be disabled in production.')
   if (allowPublicSignup) throw new Error('Public sign-up must be disabled in production.')
 }
 
 export function installRuntimeProtection() {
   assertSecureRuntimeConfiguration()
-  if (isSupabaseConfigured && !demoMode) clearSensitiveClientData()
+  if (isSupabaseConfigured) clearSensitiveClientData()
 
   const onCspViolation = (event) => reportSecurityEvent('csp_violation', 'high', {
     blocked_uri: event.blockedURI,

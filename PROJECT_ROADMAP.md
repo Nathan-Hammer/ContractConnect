@@ -10,7 +10,7 @@ This checklist is the source of truth for core product development. An item is c
 - [x] Interaction history
 - [x] Follow-up tasks with priorities and due dates
 - [x] Supabase authentication and user profiles
-- [x] Supabase persistence with fictional demo data
+- [x] Supabase persistence with production data paths and no bundled demo records
 - [x] CSV exports and blank migration templates
 
 ## 1. Contract lifecycle and renewal management
@@ -59,11 +59,12 @@ This checklist is the source of truth for core product development. An item is c
 - [x] Add an audit trail of changes
 - [x] Add restricted document access
 
-## Later integrations
+## Production integrations
 
-These are intentionally deferred until the core product is complete.
-
-- [ ] Calendar synchronization
-- [ ] Email integration
-- [ ] Automated workflow notifications
+- [x] Outlook delegated OAuth and on-demand calendar retrieval implemented
+- [x] Deploy and production-verify Outlook calendar integration
+- [x] Read-only Outlook email view restricted to registered CRM contacts
+- [x] Deploy and production-verify Outlook email integration
+- [x] Persistent in-app follow-up reminders and read state
+- [ ] Deploy and production-verify SharePoint read-only contract document view
 - [ ] Advanced analytics or AI assistance

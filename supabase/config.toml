@@ -1,0 +1,6 @@
+[functions.outlook-oauth-callback]
+verify_jwt = false
+
+# Scheduled service endpoint. The function independently requires FOLLOWUP_CRON_SECRET.
+[functions.send-followup-reminders]
+verify_jwt = false
