@@ -11,7 +11,7 @@
     "security:verify:deployment": "node scripts/post-deploy-verify.mjs"
   },
   "dependencies": {
-    "@supabase/supabase-js": "2.112.3",
+    "@supabase/supabase-js": "2.116.0",
     "@vitejs/plugin-react": "6.0.5",
     "vite": "8.2.1",
     "react": "19.2.8",
